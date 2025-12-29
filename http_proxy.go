@@ -10,16 +10,23 @@ import (
 )
 
 var targetBase *url.URL
+var allowedEndpoint string
 
 func main() {
 	// Define command-line flags
-	listenPort := flag.Int("listenPort", 7000, "Port to listen on")
-	flag.IntVar(listenPort, "p", 7000, "Port to listen on (short)")
-	
+	listenPort := flag.Int("listenPort", 7891, "Port to listen on")
+	flag.IntVar(listenPort, "p", 7891, "Port to listen on (short)")
+
 	targetUrl := flag.String("targetUrl", "http://localhost:7890", "Target base URL to proxy to (e.g. http://localhost:8081)")
 	flag.StringVar(targetUrl, "t", "http://localhost:7890", "Target base URL to proxy to (short)")
-	
+
+	endpoint := flag.String("endpoint", "", "URL path endpoint to allow (e.g. /api/v1). If specified, only requests to this path are allowed. If not specified, all paths are allowed")
+	flag.StringVar(endpoint, "e", "", "URL path endpoint to allow (short)")
+
 	flag.Parse()
+
+	// Store the allowed endpoint globally
+	allowedEndpoint = *endpoint
 
 	// Validate target URL
 	if *targetUrl == "" {
@@ -39,6 +46,13 @@ func main() {
 }
 
 func handleProxy(w http.ResponseWriter, r *http.Request) {
+	// Check if endpoint filtering is enabled and validate the path
+	if allowedEndpoint != "" && r.URL.Path != allowedEndpoint {
+		errMsg := fmt.Sprintf("Forbidden: Access to this %s is not allowed, only %s is allowed", r.URL.Path, allowedEndpoint)
+		http.Error(w, errMsg, http.StatusForbidden)
+		return
+	}
+
 	// Construct full target URL
 	targetURL := targetBase.ResolveReference(r.URL)
 
