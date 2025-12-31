@@ -99,8 +99,10 @@ func handleStaticFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleProxy(w http.ResponseWriter, r *http.Request) {
-	// Construct full target URL
+	// Construct full target URL preserving the full path
 	targetURL := targetBase.ResolveReference(r.URL)
+
+	log.Printf("Proxying: %s %s -> %s", r.Method, r.URL.Path, targetURL.String())
 
 	// Create a new request to the target
 	req, err := http.NewRequest(r.Method, targetURL.String(), r.Body)
