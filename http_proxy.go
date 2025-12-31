@@ -7,10 +7,13 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 )
 
 var targetBase *url.URL
 var allowedEndpoint string
+var webroot string
 
 func main() {
 	// Define command-line flags
@@ -23,10 +26,14 @@ func main() {
 	endpoint := flag.String("endpoint", "", "URL path endpoint to allow (e.g. /api/v1). If specified, only requests to this path are allowed. If not specified, all paths are allowed")
 	flag.StringVar(endpoint, "e", "", "URL path endpoint to allow (short)")
 
+	webrootPath := flag.String("webroot", "", "Directory path for serving static files (e.g. /opt/webroot). If specified, serve static files by default")
+	flag.StringVar(webrootPath, "w", "", "Directory path for serving static files (short)")
+
 	flag.Parse()
 
 	// Store the allowed endpoint globally
 	allowedEndpoint = *endpoint
+	webroot = *webrootPath
 
 	// Validate target URL
 	if *targetUrl == "" {
@@ -38,21 +45,60 @@ func main() {
 		log.Fatalf("Invalid targetUrl: %v", err)
 	}
 
+	// Validate webroot directory if specified
+	if webroot != "" {
+		info, err := os.Stat(webroot)
+		if err != nil {
+			log.Fatalf("Invalid webroot: %v", err)
+		}
+		if !info.IsDir() {
+			log.Fatalf("Webroot must be a directory: %s", webroot)
+		}
+		log.Printf("Serving static files from: %s", webroot)
+	}
+
 	// Start HTTP server
-	http.HandleFunc("/", handleProxy)
+	http.HandleFunc("/", handleRequest)
 	addr := fmt.Sprintf(":%d", *listenPort)
-	log.Printf("Proxy server listening on %s, forwarding to %s", addr, targetBase)
+	if webroot != "" {
+		log.Printf("Proxy server listening on %s, serving static files from %s, proxying %s to %s", addr, webroot, allowedEndpoint, targetBase)
+	} else {
+		log.Printf("Proxy server listening on %s, forwarding to %s", addr, targetBase)
+	}
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
-func handleProxy(w http.ResponseWriter, r *http.Request) {
-	// Check if endpoint filtering is enabled and validate the path
-	if allowedEndpoint != "" && r.URL.Path != allowedEndpoint {
-		errMsg := fmt.Sprintf("Forbidden: Access to this %s is not allowed, only %s is allowed", r.URL.Path, allowedEndpoint)
-		http.Error(w, errMsg, http.StatusForbidden)
-		return
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+	// Routing decision based on webroot and endpoint configuration
+	if webroot != "" {
+		// Combined mode: static files + proxy
+		if allowedEndpoint != "" && strings.HasPrefix(r.URL.Path, allowedEndpoint) {
+			// Path matches endpoint prefix -> proxy to backend
+			handleProxy(w, r)
+		} else {
+			// Path doesn't match endpoint prefix -> serve static file
+			handleStaticFile(w, r)
+		}
+	} else {
+		// Pure proxy mode (backward compatibility)
+		if allowedEndpoint != "" && r.URL.Path != allowedEndpoint {
+			// Exact match filtering (existing behavior)
+			errMsg := fmt.Sprintf("Forbidden: Access to this %s is not allowed, only %s is allowed", r.URL.Path, allowedEndpoint)
+			http.Error(w, errMsg, http.StatusForbidden)
+			return
+		}
+		// Proxy the request
+		handleProxy(w, r)
 	}
+}
 
+func handleStaticFile(w http.ResponseWriter, r *http.Request) {
+	// Use http.FileServer to serve static files
+	fileServer := http.FileServer(http.Dir(webroot))
+	fileServer.ServeHTTP(w, r)
+}
+
+func handleProxy(w http.ResponseWriter, r *http.Request) {
 	// Construct full target URL
 	targetURL := targetBase.ResolveReference(r.URL)
 
